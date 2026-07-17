@@ -260,3 +260,4 @@ window.addEventListener('DOMContentLoaded', () => {
         setStatus('Inactivo', 'idle');
     });
 });
+
