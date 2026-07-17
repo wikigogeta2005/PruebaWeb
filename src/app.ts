@@ -7,7 +7,7 @@ interface Post {
 
 const BASE_URL = 'https://jsonplaceholder.typicode.com/posts';
 
-// Elementos del DOM (Se inicializan al cargar el script)
+// Elementos del DOM (Se inicializan directamente abajo)
 let postsContainer: HTMLDivElement;
 let alertBox: HTMLDivElement;
 let statusBadge: HTMLSpanElement;
@@ -17,6 +17,22 @@ let createForm: HTMLFormElement;
 let editModal: HTMLDivElement;
 let editPostId: HTMLInputElement;
 let editTitleInput: HTMLInputElement;
+
+// --- GESTIÓN DE PERSISTENCIA LOCAL (localStorage) ---
+let localPosts: Post[] = [];
+
+function saveToLocalStorage() {
+    localStorage.setItem('posts', JSON.stringify(localPosts));
+}
+
+function loadFromLocalStorage(): boolean {
+    const stored = localStorage.getItem('posts');
+    if (stored) {
+        localPosts = JSON.parse(stored);
+        return true;
+    }
+    return false;
+}
 
 // --- GESTIÓN DE ESTADOS Y UI ---
 
@@ -59,7 +75,7 @@ function renderPosts(posts: Post[]) {
     
     if (posts.length === 0) {
         postsContainer.innerHTML = `
-            <div class="bg-white p-8 rounded-2xl border border-dashed border-slate-200 text-center text-slate-400">
+            <div class="bg-white p-8 rounded-2xl border border-dashed border-slate-200 text-center text-slate-400 md:col-span-2">
                 No se encontraron publicaciones.
             </div>`;
         return;
@@ -90,17 +106,27 @@ function renderPosts(posts: Post[]) {
     });
 }
 
-// --- MÉTODOS HTTP ---
+// --- MÉTODOS HTTP + CONTROL LOCAL ---
 
-// 1. GET (Todos los posts - limitado a 10 por estética de pantalla)
+// 1. GET (Todos los posts)
 async function fetchAllPosts() {
     setStatus('Cargando posts...', 'loading');
     try {
+        if (loadFromLocalStorage() && localPosts.length > 0) {
+            renderPosts(localPosts);
+            setStatus('Posts cargados (Local)', 'success');
+            return;
+        }
+
         const response = await fetch(`${BASE_URL}?_limit=10`);
         if (!response.ok) throw new Error(`Error en servidor: ${response.status}`);
         const data: Post[] = await response.json();
-        renderPosts(data);
-        setStatus('Posts cargados', 'success');
+        
+        localPosts = data;
+        saveToLocalStorage();
+        
+        renderPosts(localPosts);
+        setStatus('Posts cargados de API', 'success');
     } catch (error: any) {
         setStatus('Error al cargar', 'error');
         showAlert(error.message, true);
@@ -109,16 +135,25 @@ async function fetchAllPosts() {
 
 // 2. GET (Por ID de post específico)
 async function fetchPostById() {
-    const id = searchIdInput.value.trim();
-    if (!id) return showAlert('Por favor introduce un ID válido', true);
+    const id = parseInt(searchIdInput.value.trim());
+    if (isNaN(id)) return showAlert('Por favor introduce un ID válido', true);
 
     setStatus(`Buscando ID ${id}...`, 'loading');
+    loadFromLocalStorage();
+
+    const localPost = localPosts.find(p => p.id === id);
+    if (localPost) {
+        renderPosts([localPost]);
+        setStatus('Búsqueda completada (Local)', 'success');
+        return;
+    }
+
     try {
         const response = await fetch(`${BASE_URL}/${id}`);
         if (!response.ok) throw new Error(`No se encontró el post con ID: ${id}`);
         const data: Post = await response.json();
         renderPosts([data]);
-        setStatus('Búsqueda completada', 'success');
+        setStatus('Búsqueda completada (API)', 'success');
     } catch (error: any) {
         setStatus('No encontrado', 'error');
         showAlert(error.message, true);
@@ -127,19 +162,28 @@ async function fetchPostById() {
 
 // 3. GET (Filtrado de posts por userId)
 async function fetchPostsByUserId() {
-    const userId = filterUserInput.value.trim();
-    if (!userId) return showAlert('Por favor introduce un ID de usuario válido', true);
+    const userId = parseInt(filterUserInput.value.trim());
+    if (isNaN(userId)) return showAlert('Por favor introduce un ID de usuario válido', true);
 
     setStatus(`Filtrando Usuario ${userId}...`, 'loading');
-    try {
-        const response = await fetch(`${BASE_URL}?userId=${userId}`);
-        if (!response.ok) throw new Error(`Error al filtrar: ${response.status}`);
-        const data: Post[] = await response.json();
-        renderPosts(data);
-        setStatus('Filtro aplicado', 'success');
-    } catch (error: any) {
-        setStatus('Error en filtro', 'error');
-        showAlert(error.message, true);
+    loadFromLocalStorage();
+
+    const filtered = localPosts.filter(p => p.userId === userId);
+    
+    if (filtered.length > 0) {
+        renderPosts(filtered);
+        setStatus('Filtro aplicado (Local)', 'success');
+    } else {
+        try {
+            const response = await fetch(`${BASE_URL}?userId=${userId}`);
+            if (!response.ok) throw new Error(`Error al filtrar: ${response.status}`);
+            const data: Post[] = await response.json();
+            renderPosts(data);
+            setStatus('Filtro aplicado (API)', 'success');
+        } catch (error: any) {
+            setStatus('Error en filtro', 'error');
+            showAlert(error.message, true);
+        }
     }
 }
 
@@ -150,7 +194,11 @@ async function createPost(e: Event) {
     const titleVal = (document.getElementById('post-title') as HTMLInputElement).value;
     const bodyVal = (document.getElementById('post-body') as HTMLTextAreaElement).value;
 
+    loadFromLocalStorage();
+    const nextId = localPosts.length > 0 ? Math.max(...localPosts.map(p => p.id || 0)) + 1 : 101;
+
     const newPost: Post = {
+        id: nextId,
         userId: userIdVal,
         title: titleVal,
         body: bodyVal
@@ -158,76 +206,81 @@ async function createPost(e: Event) {
 
     setStatus('Guardando...', 'loading');
     try {
-        const response = await fetch(BASE_URL, {
+        await fetch(BASE_URL, {
             method: 'POST',
             body: JSON.stringify(newPost),
             headers: { 'Content-type': 'application/json; charset=UTF-8' }
         });
-        if (!response.ok) throw new Error('No se pudo simular la creación');
-        const data: Post = await response.json();
-        
-        showAlert(`¡Creado con éxito! (Simulado en ID: ${data.id})`);
-        renderPosts([data]);
-        createForm.reset();
-        setStatus('Post creado', 'success');
-    } catch (error: any) {
-        setStatus('Error al crear', 'error');
-        showAlert(error.message, true);
+    } catch (error) {
+        // Ignoramos errores de red ficticios de simulación si ocurren
     }
+        
+    localPosts.unshift(newPost);
+    saveToLocalStorage();
+    
+    showAlert(`¡Creado con éxito! Guardado en localStorage (ID: ${newPost.id})`);
+    renderPosts(localPosts);
+    createForm.reset();
+    setStatus('Post creado', 'success');
 }
 
 // 5. PATCH (Actualizar parcialmente el título)
 async function updatePostTitle() {
-    const id = editPostId.value;
+    const id = parseInt(editPostId.value);
     const newTitle = editTitleInput.value.trim();
 
     if (!newTitle) return showAlert('El título no puede estar vacío', true);
 
     setStatus('Actualizando...', 'loading');
     try {
-        const response = await fetch(`${BASE_URL}/${id}`, {
+        await fetch(`${BASE_URL}/${id}`, {
             method: 'PATCH',
             body: JSON.stringify({ title: newTitle }),
             headers: { 'Content-type': 'application/json; charset=UTF-8' }
         });
-        if (!response.ok) throw new Error('Error al actualizar el recurso');
-        const data: Post = await response.json();
-
-        // Reflejar cambio simulado dinámicamente en el DOM
-        const cardInDOM = document.querySelector(`[data-id="${id}"] h3`);
-        if (cardInDOM) {
-            cardInDOM.textContent = data.title;
-        }
-
-        showAlert(`Título actualizado exitosamente (Simulado en ID ${id})`);
-        closeModal();
-        setStatus('Actualizado', 'success');
-    } catch (error: any) {
-        setStatus('Error al actualizar', 'error');
-        showAlert(error.message, true);
+    } catch (e) {
+        // Ignorado para IDs locales artificiales
     }
+
+    loadFromLocalStorage();
+    const post = localPosts.find(p => p.id === id);
+    if (post) {
+        post.title = newTitle;
+        saveToLocalStorage();
+    }
+
+    const cardInDOM = document.querySelector(`[data-id="${id}"] h3`);
+    if (cardInDOM) {
+        cardInDOM.textContent = newTitle;
+    }
+
+    showAlert(`Título actualizado exitosamente (Persistido en ID ${id})`);
+    closeModal();
+    setStatus('Actualizado', 'success');
 }
 
-// 6. DELETE (Borrado simulado)
+// 6. DELETE (Borrado)
 async function deletePost(id: number) {
     if (!confirm(`¿Estás seguro de que deseas eliminar el post #${id}?`)) return;
 
     setStatus('Eliminando...', 'loading');
     try {
-        const response = await fetch(`${BASE_URL}/${id}`, {
+        await fetch(`${BASE_URL}/${id}`, {
             method: 'DELETE'
         });
-        if (!response.ok) throw new Error('Error al simular borrado');
-
-        const card = document.querySelector(`[data-id="${id}"]`);
-        if (card) card.remove();
-
-        showAlert(`Post #${id} eliminado con éxito (Simulado en el servidor)`);
-        setStatus('Eliminado', 'success');
-    } catch (error: any) {
-        setStatus('Error al eliminar', 'error');
-        showAlert(error.message, true);
+    } catch (e) {
+        // Ignorado para IDs locales artificiales
     }
+
+    loadFromLocalStorage();
+    localPosts = localPosts.filter(p => p.id !== id);
+    saveToLocalStorage();
+
+    const card = document.querySelector(`[data-id="${id}"]`);
+    if (card) card.remove();
+
+    showAlert(`Post #${id} eliminado con éxito de localStorage`);
+    setStatus('Eliminado', 'success');
 }
 
 // --- CONTROL DEL MODAL DE EDICIÓN ---
@@ -244,40 +297,43 @@ function closeModal() {
     }
 }
 
-// 🔥 EXPOSICIÓN GLOBAL DE FUNCIONES EN WINDOW (Clave para los onclick del HTML)
+// EXPOSICIÓN GLOBAL EN WINDOW (Para usar en los onclick="" del HTML inline)
 (window as any).openEditModal = openEditModal;
 (window as any).deletePost = deletePost;
 (window as any).closeModal = closeModal;
 (window as any).updatePostTitle = updatePostTitle;
 
-// --- ASIGNACIÓN DE EVENTOS AL CARGAR EL DOM ---
-window.addEventListener('DOMContentLoaded', () => {
-    // Inicialización segura de elementos
-    postsContainer = document.getElementById('posts-container') as HTMLDivElement;
-    alertBox = document.getElementById('alert-box') as HTMLDivElement;
-    statusBadge = document.getElementById('status-badge') as HTMLSpanElement;
-    searchIdInput = document.getElementById('search-id-input') as HTMLInputElement;
-    filterUserInput = document.getElementById('filter-user-input') as HTMLInputElement;
-    createForm = document.getElementById('create-form') as HTMLFormElement;
-    editModal = document.getElementById('edit-modal') as HTMLDivElement;
-    editPostId = document.getElementById('edit-post-id') as HTMLInputElement;
-    editTitleInput = document.getElementById('edit-title-input') as HTMLInputElement;
+// --- INICIALIZACIÓN INMEDIATA DEL SCRIPT (Sin esperar DOMContentLoaded) ---
+postsContainer = document.getElementById('posts-container') as HTMLDivElement;
+alertBox = document.getElementById('alert-box') as HTMLDivElement;
+statusBadge = document.getElementById('status-badge') as HTMLSpanElement;
+searchIdInput = document.getElementById('search-id-input') as HTMLInputElement;
+filterUserInput = document.getElementById('filter-user-input') as HTMLInputElement;
+createForm = document.getElementById('create-form') as HTMLFormElement;
+editModal = document.getElementById('edit-modal') as HTMLDivElement;
+editPostId = document.getElementById('edit-post-id') as HTMLInputElement;
+editTitleInput = document.getElementById('edit-title-input') as HTMLInputElement;
 
-    // Listeners para botones y formularios
-    document.getElementById('btn-get-all')?.addEventListener('click', fetchAllPosts);
-    document.getElementById('btn-search-id')?.addEventListener('click', fetchPostById);
-    document.getElementById('btn-filter-user')?.addEventListener('click', fetchPostsByUserId);
-    createForm?.addEventListener('submit', createPost);
-    document.getElementById('btn-close-modal')?.addEventListener('click', closeModal);
-    document.getElementById('btn-save-patch')?.addEventListener('click', updatePostTitle);
-    
-    document.getElementById('btn-clear')?.addEventListener('click', () => {
-        if (postsContainer) {
-            postsContainer.innerHTML = `
-                <div class="bg-white p-8 rounded-2xl border border-dashed border-slate-200 text-center text-slate-400">
-                    Presiona "Cargar Todos los Posts" o realiza una consulta para empezar.
-                </div>`;
-        }
-        setStatus('Inactivo', 'idle');
-    });
+// Asignación de listeners
+document.getElementById('btn-get-all')?.addEventListener('click', fetchAllPosts);
+document.getElementById('btn-search-id')?.addEventListener('click', fetchPostById);
+document.getElementById('btn-filter-user')?.addEventListener('click', fetchPostsByUserId);
+createForm?.addEventListener('submit', createPost);
+document.getElementById('btn-close-modal')?.addEventListener('click', closeModal);
+document.getElementById('btn-save-patch')?.addEventListener('click', updatePostTitle);
+
+document.getElementById('btn-clear')?.addEventListener('click', () => {
+    if (postsContainer) {
+        postsContainer.innerHTML = `
+            <div class="bg-white p-8 rounded-2xl border border-dashed border-slate-200 text-center text-slate-400 md:col-span-2">
+                Presiona "Cargar Todos los Posts" o realiza una consulta para empezar.
+            </div>`;
+    }
+    setStatus('Inactivo', 'idle');
 });
+
+// Auto-cargar si ya hay elementos guardados en LocalStorage de una sesión previa
+if (loadFromLocalStorage() && localPosts.length > 0) {
+    renderPosts(localPosts);
+    setStatus('Datos locales activos', 'success');
+}
