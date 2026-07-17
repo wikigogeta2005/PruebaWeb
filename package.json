@@ -1,0 +1,13 @@
+{
+  "name": "api-jsonplaceholder-ts",
+  "version": "1.0.0",
+  "description": "Consumo de API con TS y Docker",
+  "main": "dist/app.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/app.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
